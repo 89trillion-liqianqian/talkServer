@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package protocol;
+option go_package ="./protobuf";
+// 聊天消息
+message TaskInfo {
+	int32 code = 1;
+	string name = 2;
+	string msg = 3;
+	string cmd = 4;
+}
+
+// ping/pong
+message PingInfo {
+	string msg = 1;
+}

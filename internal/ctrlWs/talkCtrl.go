@@ -7,8 +7,19 @@ import (
 	"github.com/gorilla/websocket"
 	"log"
 	"net/http"
+	"talkServer/internal/handler"
+	"talkServer/internal/myerr"
 	"talkServer/protocol/protobuf"
 	"talkServer/utils"
+)
+
+// 定义命令
+const (
+	LoginCmd    = "login"    // 绑定 username
+	PingCmd     = "ping"     // ping/pong
+	TalkCmd     = "talk"     // 聊天
+	UserListCmd = "userlist" // 获取用户列表
+	ExitCmd     = "exit"     // 退出
 )
 
 // ClientManager is a websocket manager
@@ -54,12 +65,7 @@ func (manager *ClientManager) Start() {
 			conn.Send <- jsonMessage
 		case conn := <-Manager.Unregister:
 			log.Printf("用户离开:%v", conn.ID)
-			sendData := protobuf.TaskInfo{
-				Code: 1,
-				Msg:  "我是" + conn.UserName + "，下线了",
-				Name: conn.UserName,
-			}
-			bData, _ := proto.Marshal(&sendData)
+			bData, _ := handler.GetExitData(conn.UserName)
 			if _, ok := Manager.Clients[conn.ID]; ok {
 				conn.Send <- bData
 				close(conn.Send)
@@ -68,10 +74,9 @@ func (manager *ClientManager) Start() {
 
 		case message := <-Manager.Broadcast:
 			MessageStruct := protobuf.TaskInfo{}
+			// 解析数据，广播其他玩家
 			proto.Unmarshal(message, &MessageStruct)
-			//json.Unmarshal(message, &MessageStruct)
-			for id, conn := range Manager.Clients {
-				log.Println("---conn.ID", conn.ID, id, conn.UserName, MessageStruct.Name)
+			for _, conn := range Manager.Clients {
 				if conn.UserName == MessageStruct.Name || conn.UserName == "" {
 					continue
 				}
@@ -99,6 +104,7 @@ func getNamelist() string {
 	return string(keysB)
 }
 
+// 监听读数据
 func (c *Client) Read() {
 	defer func() {
 		Manager.Unregister <- c
@@ -116,28 +122,13 @@ func (c *Client) Read() {
 		receivedData := protobuf.TaskInfo{}
 		proto.Unmarshal(message, &receivedData)
 		// 登陆
-		if receivedData.Cmd == "login" {
+		if receivedData.Cmd == LoginCmd {
 			c.UserName = receivedData.Name
 			continue
 		}
-		// 退出
-		if receivedData.Cmd == "exit" && receivedData.Name == c.UserName {
-			Manager.Unregister <- c
-			c.Socket.Close()
-			// 广播其他人
-			Manager.Broadcast <- message
-			break
-		}
-		// 获取玩家列表 userlist
-		if receivedData.Cmd == "userlist" {
-			// 获取用户列表
-			userList := getNamelist()
-			sendData := protobuf.TaskInfo{
-				Code: 1,
-				Msg:  userList,
-				Cmd:  "userlist",
-			}
-			bData, _ := proto.Marshal(&sendData)
+		// ping/pong
+		if receivedData.Cmd == PingCmd {
+			bData, _ := handler.GetPingData()
 			select {
 			case c.Send <- bData:
 			default:
@@ -146,11 +137,33 @@ func (c *Client) Read() {
 			}
 			continue
 		}
+		// 获取玩家列表 userlist
+		if receivedData.Cmd == UserListCmd {
+			// 获取用户列表
+			userList := getNamelist()
+			bData, _ := handler.GetUserListData(userList, UserListCmd)
+			select {
+			case c.Send <- bData:
+			default:
+				close(c.Send)
+				delete(Manager.Clients, c.ID)
+			}
+			continue
+		}
+		// 退出
+		if receivedData.Cmd == ExitCmd && receivedData.Name == c.UserName {
+			Manager.Unregister <- c
+			c.Socket.Close()
+			// 广播其他人
+			Manager.Broadcast <- message
+			break
+		}
 
 		Manager.Broadcast <- message
 	}
 }
 
+// 监听写数据
 func (c *Client) Write() {
 	defer func() {
 		c.Socket.Close()
@@ -170,21 +183,20 @@ func (c *Client) Write() {
 	}
 }
 
-//TestHandler socket 连接 中间件 作用:升级协议,用户验证,自定义信息等
+//Ws Handler socket 连接 中间件 作用:升级协议,用户验证,自定义信息等
 func WsHandler(c *gin.Context) {
-	uid := c.Query("uid")
-	username := c.Request.Header["username"]
-	log.Println("---username", uid, username, c.Request.Header)
 	conn, err := (&websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}).Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		http.NotFound(c.Writer, c.Request)
+		myerr.SendHttpErr(c)
 		return
 	}
-	//可以添加用户信息验证
+	// postman 使用设置username
+	username := c.Request.Header.Get("username")
 	client := &Client{
-		ID:     utils.GetUID(),
-		Socket: conn,
-		Send:   make(chan []byte),
+		ID:       utils.GetUID(),
+		Socket:   conn,
+		Send:     make(chan []byte),
+		UserName: username,
 	}
 	Manager.Register <- client
 	go client.Read()
