@@ -36,12 +36,9 @@ liqianqian@liqianqian talkServer % tree
 │   │   └── err.go							#错误返回
 │   └── router									#聊天路由
 │       └── router.go
-├── locust											#压测
-│   ├── __pycache__
-│   │   ├── load.cpython-37.pyc
-│   │   └── locust.cpython-37.pyc
-│   ├── load.py
-│   └── report_1626961311.935244.html
+├── load.py											#压测脚本
+├── locust											#压测报告
+│   └── report_1627121507.6245902.html
 ├── pkg
 ├── protocol									#proto 文件
 │   ├── protobuf

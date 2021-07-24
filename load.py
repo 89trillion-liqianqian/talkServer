@@ -1,94 +1,94 @@
-import json
-import logging
-import re
-import threading
+from locust import User, task, events, constant
 import time
-
-import gevent
 import websocket
-from locust import User, task, events
+import json
+import jsonpath
 from protocol import talk_pb2
 
+def eventType_success(eventType, recvText, total_time):
+    events.request_success.fire(request_type="[RECV]",
+                                name=eventType,
+                                response_time=total_time,
+                                response_length=len(recvText))
 
-class SocketIOUser(User):
-    abstract = True
+class WebSocketClient(object):
 
-    def __init__(self, environment):
-        super().__init__(environment)
+    _locust_environment = None
+
+    def __init__(self, host):
+        self.host = host
+        # 连接
         self.ws = websocket.WebSocket()
-        self.ws.connect("ws://localhost:8080/ws")
+
+    def connect(self, burl):
+        start_time = time.time()
+        try:
+            self.conn = self.ws.connect(url=burl)
+        except websocket.WebSocketTimeoutException as e:
+            total_time = int((time.time() - start_time) * 1000)
+            events.request_failure.fire(
+                request_type="[Connect]", name='TimeOut', response_time=total_time, exception=e)
+        else:
+            total_time = int((time.time() - start_time) * 1000)
+            events.request_success.fire(
+                request_type="[Connect]", name='WebSocket', response_time=total_time, response_length=0)
+        return self.conn
+
+    def recv(self):
+        return self.ws.recv()
+
+    def send(self, msg):
+        self.ws.send(msg)
+
+class WebsocketUser(User):
+    abstract = True
+    def __init__(self, *args, **kwargs):
+        super(WebsocketUser, self).__init__(*args, **kwargs)
+        self.client = WebSocketClient(self.host)
+        self.client._locust_environment = self.environment
+
+class ApiUser(WebsocketUser):
+    host = 'ws://127.0.0.1:8000/ws'
+    wait_time = constant(0)
+
+    @task(1)
+    def pft(self):
+        # wss 地址
+        self.url = 'ws://127.0.0.1:8000/ws'
+        self.data = {}
+        self.client.connect(self.url)
+
+        # 发送的订阅请求
         datas = talk_pb2.TaskInfo()
         datas.code = 1
         datas.name = "qq"
-        datas.msg = "登陆"
-        datas.cmd = "login"
+        datas.msg = "聊天"
+        datas.cmd = "talk"
         dataB = datas.SerializeToString()
-        self.ws.send(dataB)
-        timer = threading.Timer(1, self.fun_heart)
-        timer.start()
+        self.client.send(dataB)
 
-    # ping/pong
-    def fun_heart(self):
-        datas = talk_pb2.PingInfo()
-        datas.msg = "ping"
-        dataB = datas.SerializeToString()
-        self.ws.send(json.dumps(dataB))
-        timer = threading.Timer(3, self.fun_heart)
-        timer.start()
+        while True:
+            # 消息接收计时
+            start_time = time.time()
+            recv = self.client.recv()
+            total_time = int((time.time() - start_time) * 1000)
 
-
-class MySocketIOUser(SocketIOUser):
-
-    @task
-    def test_ws(self, send_flag=False):
-        # seng_flag = False
-        # self.connect(self.host)
-        # 这里可以使用这一个task来完成发送订阅和处理订阅
-        time.sleep(0.5)
-        if not send_flag:
-            datas = talk_pb2.TaskInfo()
-            datas.code = 1
-            datas.name = "qq"
-            datas.msg = "来聊几句"
-            datas.cmd = "talk"
-            dataB = datas.SerializeToString()
-            self.ws.send(dataB)
-            dataR = self.ws.recv()
-            result = talk_pb2.TaskInfo
-            result.ParseFromString(dataR)
-            print(result)
-            send_flag=True
-            events.request_success.fire(
-                request_type="ws",
-                name="send_entrust",
-                response_time=100,
-                response_length=300)
-        else:
-            flag = True
-            # 循环接收
-            while flag:
-                # self.ws本身是个迭代器，next和调用resv()是一样的，都可以
-                start_time = time.time()
-                resv = next(self.ws)
-                # 推送间隔就可以当做统计数据进行显示
-                total_time = int((time.time() - start_time) * 1000)
-                if resv != '':
-                    events.request_success.fire(
-                        request_type="ws",
-                        name="resv_entrust",
-                        response_time=total_time,
-                        response_length=59)
-                else:
-                    # 如果中断了可以增加重连方案
-                    events.request_failure.fire(
-                        request_type="ws",
-                        name="resv_entrust",
-                        response_time=total_time,
-                        exception=Exception(""),
-                    )
-                    flag = False
-            else:
-                print("---")
-
-    if __name__ == "__main__":
-        host = "ws://127.0.0.1:8000/ws"
+            # 为每个推送过来的事件进行归类和独立计算性能指标
+            try:
+                result = talk_pb2.TaskInfo
+                result.ParseFromString(recv)
+                print(result)
+                # recv_j = json.loads(recv)
+                # eventType_s = jsonpath.jsonpath(recv_j, expr='$.eventType')
+                # eventType_success(eventType_s[0], recv, total_time)
+            except websocket.WebSocketTimeoutException as e:
+                events.request_failure.fire(request_type="[ERROR] WebSocketConnectionClosedException",
+                                            name='Connection is already closed.',
+                                            response_time=total_time,
+                                            exception=e)
+            except:
+                print(recv)
+                # 正常 OK 响应，或者其它心跳响应加入进来避免当作异常处理
+                eventType_success('ok', 'ok', total_time)
+                # if 'content' in recv:
+                #     eventType_success('ok', 'ok', total_time)
