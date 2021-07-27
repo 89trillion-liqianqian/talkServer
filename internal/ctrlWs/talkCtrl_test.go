@@ -5,6 +5,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
 	"net/url"
+	"talkServer/internal/ws"
 	"talkServer/protocol/protobuf"
 	"testing"
 )
@@ -22,7 +23,7 @@ func TestLogin(t *testing.T) {
 		Code: 1,
 		Msg:  "我是 001，登陆",
 		Name: "001",
-		Cmd:  LoginCmd,
+		Cmd:  ws.LoginCmd,
 	}
 	bData, _ := proto.Marshal(&sendData)
 	conn.WriteMessage(websocket.BinaryMessage, bData)
